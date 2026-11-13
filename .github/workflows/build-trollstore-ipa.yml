@@ -1,0 +1,79 @@
+name: Build TrollStore IPA
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'UnoDeluxe15.zip'
+      - 'UnoDeluxe15/**'
+      - 'UnoDeluxe15.xcodeproj/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Unpack project zip if needed
+        run: |
+          if ! find . -name "UnoDeluxe15.xcodeproj" -maxdepth 4 | grep -q .; then
+            ZIP=$(ls *.zip 2>/dev/null | head -1)
+            if [ -z "$ZIP" ]; then
+              echo "プロジェクトも zip も見つかりません" >&2
+              exit 1
+            fi
+            unzip -o "$ZIP"
+          fi
+          PROJ=$(find . -name "UnoDeluxe15.xcodeproj" -maxdepth 4 | head -1)
+          echo "PROJ_PATH=$PROJ" >> "$GITHUB_ENV"
+          echo "Using project: $PROJ"
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build unsigned app
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project "$PROJ_PATH" \
+            -scheme UnoDeluxe15 \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: Package TrollStore IPA
+        run: |
+          APP=$(find "$RUNNER_TEMP/DerivedData/Build/Products" -name "UnoDeluxe15.app" -maxdepth 2 | head -1)
+          if [ -z "$APP" ]; then
+            echo ".app が生成されませんでした" >&2
+            exit 1
+          fi
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry UnoDeluxe15.tipa Payload
+          cp UnoDeluxe15.tipa UnoDeluxe15.ipa
+          ls -lh UnoDeluxe15.tipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: UnoDeluxe15-tipa
+          path: |
+            UnoDeluxe15.tipa
+            UnoDeluxe15.ipa
+          if-no-files-found: error
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: ${{ runner.temp }}/build.log
+          if-no-files-found: ignore
